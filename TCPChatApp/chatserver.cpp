@@ -19,30 +19,41 @@ using boost::asio::ip::tcp;
 #include <cstring>
 
 void testConnection();
-void handle_msgs(std::shared_ptr<tcp::socket> socket); // Pass shared_ptr
+void handle_msgs(std::shared_ptr<tcp::socket> socket_ptr, int connect_num); // Pass shared_ptr
 std::string make_daytime_string();
 std::string intro();
 std::queue<std::string> q;
 std::mutex mtx;
 std::vector<std::thread> threads;
+std::vector<tcp::socket> sockets;
+std::vector<std::shared_ptr<boost::asio::ip::tcp::socket>> socket_ptrs;
+
 
 void testConnection(){ 
+    boost::system::error_code ignored_error;
     constexpr unsigned short PORT = 12345;
     try{
         boost::asio::io_context io_context;
         // A tcp::acceptor object to listen for new connections. Set to listen on TCP port 12345, IP version 4.
         tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), PORT));
-        int thread_ind = 0;
+        int connect_num = 0;
         for(;;){
             // Shared pointer to dynamically allocated socket
-            auto socket = std::make_shared<tcp::socket>(io_context); // Use shared_ptr here
+            auto socket_ptr = std::make_shared<tcp::socket>(io_context); // Use shared_ptr here
+            socket_ptrs.push_back(socket_ptr);
 
             std::cout << "awaiting connection...." << std::endl;
-            acceptor.accept(*socket);  // Dereference the shared pointer to pass to acceptor
+            acceptor.accept(*socket_ptr);  // Dereference the shared pointer to pass to acceptor
 
+            //std::string connect_num_str = std::to_string(connect_num);// no actual need
+
+            std::string message(1, '\0'); // 1024
+            
+            //boost::asio::write(*(socket_ptr), boost::asio::buffer(connect_num_str), ignored_error); no actual need for this
+            
             // Pass the shared_ptr to the thread
-            threads.push_back(std::thread(handle_msgs, socket)); // Pass the shared_ptr directly
-            thread_ind++;
+            threads.push_back(std::thread(handle_msgs, socket_ptr, connect_num)); // Pass the shared_ptr directly
+            connect_num++;
         }
         
         // Join all threads
@@ -58,14 +69,18 @@ void testConnection(){
     }
 }
 
-void handle_msgs(std::shared_ptr<tcp::socket> socket) {  // Accept shared_ptr
+void handle_msgs(std::shared_ptr<tcp::socket> socket_ptr, int connect_num) {  // Accept shared_ptr
     boost::system::error_code ignored_error;
     
     for(;;){
         std::string message(30, '\0'); // 1024
         boost::system::error_code error;
-        socket->receive(boost::asio::buffer(message), 0, error);  // Dereference shared_ptr to use socket
+        socket_ptr->receive(boost::asio::buffer(message), 0, error);  // De-reference shared_ptr to use socket
         
+        message = std::to_string(connect_num) + ": " + message;
+        // std::cout << "TEST SERVER-SIDE MESSAGE: " << message<< std::endl;
+
+
         if (error) {
             if (error == boost::asio::error::eof) {
                 std::cout << "Connection closed by client.\n";
@@ -86,25 +101,19 @@ void handle_msgs(std::shared_ptr<tcp::socket> socket) {  // Accept shared_ptr
         // Lock and push to queue
         mtx.lock();
         q.push(message);
-        std::cout << "Added to queue: " << q.back() << std::endl;
+        // std::cout << "Added to queue: " << q.back() << std::endl;
         mtx.unlock();
+
+        int num_sock_ptrs = static_cast<int>(socket_ptrs.size());
+
+        for (int i = 0; i < num_sock_ptrs; i++){
+            boost::asio::write(*(socket_ptrs.at(i)), boost::asio::buffer(message), ignored_error);
+        }
+
+
     }
 }
 
-std::string make_daytime_string()
-{
-  using namespace std; // For time_t, time and ctime;
-  time_t now = time(0);
-  return ctime(&now);
-}
-
-std::string intro()
-{
-    std::string mode;
-    std::cout << "\nWelcome to Andre's Tic-Tac-Toe. Please select a game mode. Enter '1' for single player mode (Play against an AI). Select '2' for two player mode.\n";
-    std::cin >> mode;
-    return mode;
-}
 
 using boost::asio::ip::tcp;
 int main(int argc, char* argv[]) { 
